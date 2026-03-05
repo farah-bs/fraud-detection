@@ -2,8 +2,6 @@
 
 Pipeline de détection de comptes frauduleux pour application mobile : bases de données hybrides (PostgreSQL + Neo4j) + Graph Neural Network (PyTorch).
 
----
-
 ## Bases de données
 
 **PostgreSQL** : table `users`
@@ -19,8 +17,6 @@ Pipeline de détection de comptes frauduleux pour application mobile : bases de 
 | `is_fraud` | BOOLEAN | Label ground-truth |
 
 **Neo4j** : nœuds `User`, relations `KNOWS` et `SENT_MSG { count }`
-
----
 
 ## Lancement
 
