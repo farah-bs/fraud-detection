@@ -1,36 +1,46 @@
 """
-Configuration centralisée : connexions PostgreSQL, Neo4j et paramètres du modèle.
+Configuration centralisée : connexions PostgreSQL, Neo4j et paramètres du modèle
 """
 
 import os
 
+
+def _require(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise EnvironmentError(
+            f"Variable d'environnement manquante : {name}\n"
+            "Assurez-vous d'avoir copié .env.example en .env et de l'avoir rempli."
+        )
+    return value
+
+
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
 POSTGRES_CONFIG = {
-    "host":     os.getenv("PG_HOST", "localhost"),
-    "port":     int(os.getenv("PG_PORT", 5432)),
-    "dbname":   os.getenv("PG_DB",   "social_app"),
-    "user":     os.getenv("PG_USER", "postgres"),
-    "password": os.getenv("PG_PASS", "postgres"),
+    "host":     _require("PG_HOST"),
+    "port":     int(os.getenv("PG_PORT", "5432")),
+    "dbname":   _require("PG_DB"),
+    "user":     _require("PG_USER"),
+    "password": _require("PG_PASS"),
 }
 
 # ── Neo4j ────────────────────────────────────────────────────────────────────
-NEO4J_URI      = os.getenv("NEO4J_URI",  "bolt://localhost:7687")
-NEO4J_USER     = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASS", "password")
+NEO4J_URI      = _require("NEO4J_URI")
+NEO4J_USER     = _require("NEO4J_USER")
+NEO4J_PASSWORD = _require("NEO4J_PASS")
 
 # ── Modèle GNN ───────────────────────────────────────────────────────────────
 MODEL_CONFIG = {
-    "node_feature_dim": 8,    # nombre de features par nœud (voir graph_features.py)
-    "hidden_dim":       64,
-    "num_layers":       3,
-    "dropout":          0.3,
-    "learning_rate":    1e-3,
-    "epochs":           100,
-    "batch_size":       32,
+    "node_feature_dim": int(os.getenv("GNN_FEATURE_DIM",   8)),
+    "hidden_dim":       int(os.getenv("GNN_HIDDEN_DIM",    64)),
+    "num_layers":       int(os.getenv("GNN_NUM_LAYERS",    3)),
+    "dropout":          float(os.getenv("GNN_DROPOUT",     0.3)),
+    "learning_rate":    float(os.getenv("GNN_LR",          1e-3)),
+    "epochs":           int(os.getenv("GNN_EPOCHS",        100)),
+    "batch_size":       int(os.getenv("GNN_BATCH_SIZE",    32)),
 }
 
-MODEL_PATH = os.getenv("MODEL_PATH", "model/gnn_fraud_detector.pt")
+MODEL_PATH = os.getenv("MODEL_PATH", "/app/model/gnn_fraud_detector.pt")
 
 # ── Seuil de décision ────────────────────────────────────────────────────────
-# Score de confiance au-dessus duquel un compte est considéré frauduleux
-FRAUD_THRESHOLD = 0.6 # on peut l'ajuster selon les besoins
+FRAUD_THRESHOLD = float(os.getenv("FRAUD_THRESHOLD", 0.6))
