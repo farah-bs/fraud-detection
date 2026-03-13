@@ -5,3 +5,6 @@ data/processed/*
 checkpoints/*
 model/gnn_fraud_detector.pt
 runs/*
+/.idea/
+/data/social_honeypot_dataset/*
+!/data/social_honeypot_dataset/.gitkeep
