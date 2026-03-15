@@ -3,6 +3,16 @@ Configuration centralisée : connexions PostgreSQL, Neo4j et paramètres du mod�
 """
 
 import os
+from pathlib import Path
+
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    env_file = Path(__file__).parent / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
+except ImportError:
+    pass
 
 
 def _require(name: str) -> str:
