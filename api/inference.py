@@ -1,6 +1,14 @@
 """
-API FastAPI d'inférence du GNN de détection de fraude
-+ modération de contenu (TwitterRoBERTa multi-label).
+Unified Inference API for Fraud Detection & Content Moderation
+
+Two models integrated:
+1. GNN Fraud Detector: Detects fraudulent accounts using graph neural networks
+2. Content Moderation: Classifies tweets across 8 moderation categories
+
+Endpoints organized by model type:
+- /fraud/* → GNN fraud detection endpoints
+- /moderation/* → Content moderation endpoints
+- /health → API health & model status
 """
 
 from __future__ import annotations
@@ -51,10 +59,12 @@ def _load_model() -> None:
     global _model, _data_x, _data_edge, _user_ids, _id2idx
 
     if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(
-            f"Modèle introuvable : {MODEL_PATH}. "
-            "Lancez d'abord : python model/train.py"
+        print(
+            f"[API] GNN Fraud detection model not found: {MODEL_PATH}. "
+            "Endpoint /score will be unavailable. "
+            "Train it with: python model/train_gnn.py"
         )
+        return
 
     checkpoint = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
     cfg = checkpoint.get("model_config", MODEL_CONFIG)
@@ -114,8 +124,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Fraud Detection API",
-    description="Score de confiance de fraude basé sur GNN",
+    title="Fraud Detection & Content Moderation API",
+    description=(
+        "Unified API for detecting fraudulent accounts (GNN) and moderating tweet content (RoBERTa). "
+        "Two independent models: (1) GNN-based account fraud detection via /fraud/* endpoints, "
+        "(2) TwitterRoBERTa multi-label content moderation via /moderation/* endpoints."
+    ),
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -143,6 +157,11 @@ class BatchScoreResponse(BaseModel):
 
 def _score_user(user_id: int) -> float:
     """Retourne le score de fraude [0,1] pour un utilisateur donné."""
+    if _model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="GNN fraud detection model not loaded. Train it first: python model/train.py",
+        )
     if user_id not in _id2idx:
         raise HTTPException(
             status_code=404,
@@ -172,31 +191,66 @@ def _build_response(user_id: int, score: float) -> FraudScoreResponse:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@app.get("/health")
+@app.get("/health", tags=["System"])
 def health_check():
+    """
+    Check API health and model availability status.
+
+    Returns status of both GNN fraud detection and content moderation models.
+    """
     return {
-        "status":           "ok",
-        "model_loaded":     _model is not None,
-        "indexed_users":    len(_user_ids),
-        "fraud_threshold":  FRAUD_THRESHOLD,
+        "status": "ok",
+        "models": {
+            "gnn_fraud_detection": {
+                "loaded": _model is not None,
+                "indexed_users": len(_user_ids),
+                "threshold": FRAUD_THRESHOLD,
+            },
+            "content_moderation": {
+                "loaded": _mod_model is not None,
+                "threshold": MODERATION_THRESHOLD,
+            },
+        },
     }
 
 
-@app.get("/score/{user_id}", response_model=FraudScoreResponse)
+@app.get("/fraud/score/{user_id}", response_model=FraudScoreResponse, tags=["GNN Fraud Detection"])
 def get_fraud_score(user_id: int):
     """
-    Calcule le score de fraude pour un utilisateur.
-    Appelé par l'app mobile après chaque action sensible.
+    **GNN Model** - Get fraud score for a single user account.
+
+    Uses Graph Neural Network to analyze user's network patterns, account features,
+    and behavioral signals to detect fraudulent accounts.
+
+    Returns:
+    - `fraud_score`: Probability [0, 1] that account is fraudulent
+    - `is_suspicious`: Boolean flag if score >= threshold
+    - `threshold`: Decision threshold used
+    - `message`: Human-readable verdict
+
+    Example: `GET /fraud/score/12345`
     """
     score = _score_user(user_id)
     return _build_response(user_id, score)
 
 
-@app.post("/score/batch", response_model=BatchScoreResponse)
+@app.post("/fraud/score/batch", response_model=BatchScoreResponse, tags=["GNN Fraud Detection"])
 def get_fraud_scores_batch(request: BatchScoreRequest):
     """
-    Calcule les scores de fraude pour une liste d'utilisateurs en une seule passe.
-    Utile pour l'analyse côté admin ou lors d'un onboarding en masse.
+    **GNN Model** - Get fraud scores for multiple user accounts in a single request.
+
+    Efficiently score a batch of user IDs using the GNN model.
+    Useful for admin dashboards, bulk user reviews, or onboarding analysis.
+
+    Request body:
+    ```json
+    {
+      "user_ids": [123, 456, 789]
+    }
+    ```
+
+    Returns: List of fraud scores for each user ID.
+    Failed queries return score=-1.0 with error details.
     """
     results = []
     for uid in request.user_ids:
@@ -214,12 +268,24 @@ def get_fraud_scores_batch(request: BatchScoreRequest):
     return BatchScoreResponse(results=results)
 
 
-@app.get("/top-suspicious", response_model=BatchScoreResponse)
+@app.get("/fraud/top-suspicious", response_model=BatchScoreResponse, tags=["GNN Fraud Detection"])
 def get_top_suspicious(limit: int = 20):
     """
-    Retourne les `limit` utilisateurs avec le score de fraude le plus élevé.
-    Utile pour un tableau de bord de modération.
+    **GNN Model** - Get top N most suspicious user accounts ranked by fraud score.
+
+    Returns accounts with highest fraud probability scores.
+    Useful for moderation dashboards, priority review lists, or risk assessment.
+
+    Query parameters:
+    - `limit`: Number of top accounts to return (default: 20, max: 1000)
+
+    Example: `GET /fraud/top-suspicious?limit=50`
     """
+    if _model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="GNN fraud detection model not loaded. Train it first: python model/train_gnn.py",
+        )
     proba = _model.predict_proba(_data_x, _data_edge).numpy()
     top_indices = np.argsort(proba)[::-1][:limit]
     results = [
@@ -241,13 +307,36 @@ class ModerationResponse(BaseModel):
     verdict: str                # highest-scoring harmful label, or "safe"
 
 
-@app.post("/moderate", response_model=ModerationResponse)
+@app.post("/moderation/check", response_model=ModerationResponse, tags=["Content Moderation"])
 def moderate_tweet(request: ModerationRequest):
     """
-    Score a tweet across 8 moderation categories and return the top verdict.
+    **Content Moderation Model** - Analyze tweet content across 8 moderation categories.
 
-    Categories: toxic | severe_toxic | obscene | threat | insult |
-                identity_hate | spam | safe
+    Uses fine-tuned TwitterRoBERTa to detect harmful content:
+    - **toxic**: General toxicity/hostility
+    - **severe_toxic**: Severe harmful content
+    - **obscene**: Obscene language
+    - **threat**: Threats of violence
+    - **insult**: Insults/name-calling
+    - **identity_hate**: Hateful speech targeting groups
+    - **spam**: Spam/promotional content
+    - **safe**: Safe/benign content
+
+    Returns probability scores [0, 1] for each category and overall verdict.
+
+    Request body:
+    ```json
+    {
+      "tweet": "Your tweet text to analyze"
+    }
+    ```
+
+    Response includes:
+    - `verdict`: Highest-scoring harmful label or "safe"
+    - `scores`: Dict of all category probabilities
+    - `tweet`: Original tweet text
+
+    Example: `POST /moderation/check`
     """
     if _mod_model is None or _mod_tokenizer is None:
         raise HTTPException(
@@ -284,6 +373,52 @@ def moderate_tweet(request: ModerationRequest):
         verdict = "safe"
 
     return ModerationResponse(tweet=tweet, scores=scores, verdict=verdict)
+
+
+# ── Backward Compatibility Aliases (deprecated, redirects to new endpoints) ──
+
+@app.get("/score/{user_id}", response_model=FraudScoreResponse, deprecated=True, tags=["GNN Fraud Detection (Deprecated)"])
+def get_fraud_score_deprecated(user_id: int):
+    """
+    **DEPRECATED** - Use `/fraud/score/{user_id}` instead.
+
+    This endpoint is maintained for backward compatibility only.
+    All new integrations should use the `/fraud/` endpoints.
+    """
+    return get_fraud_score(user_id)
+
+
+@app.post("/score/batch", response_model=BatchScoreResponse, deprecated=True, tags=["GNN Fraud Detection (Deprecated)"])
+def get_fraud_scores_batch_deprecated(request: BatchScoreRequest):
+    """
+    **DEPRECATED** - Use `/fraud/score/batch` instead.
+
+    This endpoint is maintained for backward compatibility only.
+    All new integrations should use the `/fraud/` endpoints.
+    """
+    return get_fraud_scores_batch(request)
+
+
+@app.get("/top-suspicious", response_model=BatchScoreResponse, deprecated=True, tags=["GNN Fraud Detection (Deprecated)"])
+def get_top_suspicious_deprecated(limit: int = 20):
+    """
+    **DEPRECATED** - Use `/fraud/top-suspicious` instead.
+
+    This endpoint is maintained for backward compatibility only.
+    All new integrations should use the `/fraud/` endpoints.
+    """
+    return get_top_suspicious(limit)
+
+
+@app.post("/moderate", response_model=ModerationResponse, deprecated=True, tags=["Content Moderation (Deprecated)"])
+def moderate_tweet_deprecated(request: ModerationRequest):
+    """
+    **DEPRECATED** - Use `/moderation/check` instead.
+
+    This endpoint is maintained for backward compatibility only.
+    All new integrations should use the `/moderation/` endpoints.
+    """
+    return moderate_tweet(request)
 
 
 # ── Lancement ─────────────────────────────────────────────────────────────────
