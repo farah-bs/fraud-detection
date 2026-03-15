@@ -14,3 +14,12 @@ pydantic>=2.6.0
 # ML
 scikit-learn>=1.4.0
 numpy>=1.26.0
+transformers>=4.40.0
+sentencepiece>=0.1.99
+
+# Utilitaires
+tqdm
+tensorboard>=2.15.0
+wandb>=0.17.0
+
+pandas

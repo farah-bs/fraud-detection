@@ -1,5 +1,6 @@
 """
-API FastAPI d'inférence du GNN de détection de fraude.
+API FastAPI d'inférence du GNN de détection de fraude
++ modération de contenu (TwitterRoBERTa multi-label).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from transformers import AutoTokenizer
 import uvicorn
 
 
@@ -19,6 +21,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from config import FRAUD_THRESHOLD, MODEL_PATH, MODEL_CONFIG
 from model.gnn_model import FraudGNN
+from model.content_moderation_model import (
+    LABEL_NAMES as MOD_LABEL_NAMES,
+    ContentModerationModel,
+    load_from_checkpoint,
+)
+
+MODERATION_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "checkpoints",
+    "content_moderation_best.pt",
+)
+MODERATION_THRESHOLD = 0.5
 
 # ── État global (chargé une seule fois au démarrage) ─────────────────────────
 
@@ -27,6 +41,10 @@ _data_x:        torch.Tensor | None = None
 _data_edge:     torch.Tensor | None = None
 _user_ids:      list[int]           = []
 _id2idx:        dict[int, int]      = {}
+
+_mod_model:     ContentModerationModel | None = None
+_mod_tokenizer                                = None
+_mod_device:    torch.device                  = torch.device("cpu")
 
 
 def _load_model() -> None:
@@ -61,11 +79,37 @@ def _load_model() -> None:
     print(f"[API] Modèle chargé — {len(_user_ids)} utilisateurs indexés.")
 
 
+def _load_moderation_model() -> None:
+    global _mod_model, _mod_tokenizer, _mod_device
+
+    if not os.path.exists(MODERATION_MODEL_PATH):
+        print(
+            "[API] Modèle de modération introuvable — "
+            "endpoint /moderate désactivé. "
+            "Lancez d'abord: python data/preprocess_tweets.py && "
+            "python data/pseudo_label.py && python model/train_content_moderation.py"
+        )
+        return
+
+    _mod_device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
+
+    _mod_model, cfg = load_from_checkpoint(MODERATION_MODEL_PATH, device=_mod_device)
+    base_model      = cfg.get("base_model", "cardiffnlp/twitter-roberta-base")
+    _mod_tokenizer  = AutoTokenizer.from_pretrained(base_model)
+
+    print(f"[API] Modèle de modération chargé [{_mod_device}]  {MODERATION_MODEL_PATH}")
+
+
 # ── Lifespan (FastAPI ≥ 0.93) ─────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_model()
+    _load_moderation_model()
     yield
 
 
@@ -183,6 +227,63 @@ def get_top_suspicious(limit: int = 20):
         for i in top_indices
     ]
     return BatchScoreResponse(results=results)
+
+
+# ── Content moderation endpoint ───────────────────────────────────────────────
+
+class ModerationRequest(BaseModel):
+    tweet: str
+
+
+class ModerationResponse(BaseModel):
+    tweet:   str
+    scores:  dict[str, float]   # label → probability [0, 1]
+    verdict: str                # highest-scoring harmful label, or "safe"
+
+
+@app.post("/moderate", response_model=ModerationResponse)
+def moderate_tweet(request: ModerationRequest):
+    """
+    Score a tweet across 8 moderation categories and return the top verdict.
+
+    Categories: toxic | severe_toxic | obscene | threat | insult |
+                identity_hate | spam | safe
+    """
+    if _mod_model is None or _mod_tokenizer is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Content moderation model not loaded. "
+                "Train it first: python model/train_content_moderation.py"
+            ),
+        )
+
+    tweet = request.tweet.strip()
+    if not tweet:
+        raise HTTPException(status_code=422, detail="tweet text must not be empty")
+
+    enc = _mod_tokenizer(
+        tweet,
+        truncation=True,
+        padding="max_length",
+        max_length=128,
+        return_tensors="pt",
+    )
+    enc = {k: v.to(_mod_device) for k, v in enc.items()}
+
+    probs = _mod_model.predict_proba(
+        enc["input_ids"], enc["attention_mask"]
+    ).squeeze(0).cpu().tolist()
+
+    scores = {label: round(prob, 4) for label, prob in zip(MOD_LABEL_NAMES, probs)}
+
+    # Verdict = highest-scoring harmful label (exclude "safe" from this ranking)
+    harmful_labels = [l for l in MOD_LABEL_NAMES if l != "safe"]
+    verdict = max(harmful_labels, key=lambda l: scores[l])
+    if scores[verdict] < MODERATION_THRESHOLD:
+        verdict = "safe"
+
+    return ModerationResponse(tweet=tweet, scores=scores, verdict=verdict)
 
 
 # ── Lancement ─────────────────────────────────────────────────────────────────
