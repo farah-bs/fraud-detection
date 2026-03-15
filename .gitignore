@@ -1,2 +1,6 @@
 .env
 notes.md
+data/processed/*
+.DS_Store
+checkpoints/*
+model/gnn_fraud_detector.pt
