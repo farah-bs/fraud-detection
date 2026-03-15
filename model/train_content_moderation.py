@@ -61,6 +61,8 @@ DEFAULT_CONFIG = {
     "threshold":   0.5,
     "num_workers": 0 if sys.platform == "darwin" else 4,
     "log_every_steps": 50,
+    "early_stopping_patience": 2,
+    "early_stopping_min_delta": 1e-4,
 }
 
 DATA_DIR  = os.path.join(ROOT, "data", "processed")
@@ -311,6 +313,7 @@ def train(cfg: dict) -> None:
     print(f"  Records: {run_dir}")
 
     best_macro_f1 = 0.0
+    epochs_without_improvement = 0
     global_step = 0
 
     # -- Epoch loop --
@@ -383,11 +386,26 @@ def train(cfg: dict) -> None:
         last_path = os.path.join(CKPT_DIR, "content_moderation_last.pt")
         torch.save(ckpt, last_path)
 
-        if metrics["macro_f1"] > best_macro_f1:
+        if metrics["macro_f1"] > (best_macro_f1 + cfg["early_stopping_min_delta"]):
             best_macro_f1 = metrics["macro_f1"]
+            epochs_without_improvement = 0
             best_path = os.path.join(CKPT_DIR, "content_moderation_best.pt")
             torch.save(ckpt, best_path)
             print(f"  ✓ New best macro-F1 = {best_macro_f1:.4f} — saved to {best_path}")
+        else:
+            epochs_without_improvement += 1
+            print(
+                f"  No val improvement for {epochs_without_improvement} epoch(s) "
+                f"(patience={cfg['early_stopping_patience']})"
+            )
+
+            if epochs_without_improvement >= cfg["early_stopping_patience"]:
+                print(
+                    "  Early stopping triggered: "
+                    f"no macro-F1 improvement >= {cfg['early_stopping_min_delta']} "
+                    f"for {cfg['early_stopping_patience']} consecutive epoch(s)."
+                )
+                break
 
     if tb_writer is not None:
         tb_writer.close()
@@ -419,6 +437,18 @@ if __name__ == "__main__":
         type=int,
         default=50,
         help="Log training step loss every N optimizer steps (default: 50)",
+    )
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=DEFAULT_CONFIG["early_stopping_patience"],
+        help="Stop training after N epochs without val macro-F1 improvement (default: 2)",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=DEFAULT_CONFIG["early_stopping_min_delta"],
+        help="Minimum val macro-F1 improvement to reset early stopping (default: 1e-4)",
     )
     parser.add_argument(
         "--tracking",
@@ -455,6 +485,8 @@ if __name__ == "__main__":
     cfg["threshold"]   = args.threshold
     cfg["num_workers"] = args.num_workers
     cfg["log_every_steps"] = args.log_every_steps
+    cfg["early_stopping_patience"] = args.early_stopping_patience
+    cfg["early_stopping_min_delta"] = args.early_stopping_min_delta
     cfg["tracking"]    = args.tracking
     cfg["run_name"]    = args.run_name
     cfg["wandb_project"] = args.wandb_project
