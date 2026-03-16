@@ -26,12 +26,20 @@ def _require(name: str) -> str:
 
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
-POSTGRES_CONFIG = {
-    "host":     _require("PG_HOST"),
-    "port":     int(os.getenv("PG_PORT", "5432")),
-    "dbname":   _require("PG_DB"),
-    "user":     _require("PG_USER"),
-    "password": _require("PG_PASS"),
+POSTGRES_CONFIG_TRAIN = {
+    "host":     _require("PG_HOST_TRAIN"),
+    "port":     int(os.getenv("PG_PORT_TRAIN", "5432")),
+    "dbname":   _require("PG_DB_TRAIN"),
+    "user":     _require("PG_USER_TRAIN"),
+    "password": _require("PG_PASS_TRAIN"),
+}
+
+POSTGRES_CONFIG_PROD = {
+    "host":     _require("PG_HOST_PROD"),
+    "port":     int(os.getenv("PG_PORT_PROD", "5432")),
+    "dbname":   _require("PG_DB_PROD"),
+    "user":     _require("PG_USER_PROD"),
+    "password": _require("PG_PASS_PROD"),
 }
 
 # ── Neo4j ────────────────────────────────────────────────────────────────────
@@ -71,6 +79,8 @@ MODEL_CONFIG = {
 }
 
 MODEL_PATH = os.getenv("MODEL_PATH", "/app/model/gnn_fraud_detector.pt")
+# MODEL_PATH = os.getenv("MODEL_PATH", "/app/model/gnn_fraud_detector.pt")
+MODERATION_MODEL_PATH = os.getenv("MODERATION_MODEL_PATH", "/app/model/content_moderation_model.pt")
 
 # ── Seuil de décision ────────────────────────────────────────────────────────
 FRAUD_THRESHOLD = float(os.getenv("FRAUD_THRESHOLD", 0.6))

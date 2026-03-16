@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import psycopg2
 from neo4j import GraphDatabase
 
-from config import POSTGRES_CONFIG, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+from config import POSTGRES_CONFIG_TRAIN, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
 """
 
 def populate_postgres(users: list[dict]) -> None:
-    conn = psycopg2.connect(**POSTGRES_CONFIG)
+    conn = psycopg2.connect(**POSTGRES_CONFIG_TRAIN)
     cur  = conn.cursor()
     cur.execute(PG_SCHEMA)
 

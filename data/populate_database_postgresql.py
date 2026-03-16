@@ -18,7 +18,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 from tqdm import tqdm
 
-from config import POSTGRES_CONFIG, DATASET_DIR
+from config import POSTGRES_CONFIG_TRAIN, DATASET_DIR
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
 
@@ -49,11 +49,11 @@ CREATE TABLE IF NOT EXISTS posts (
 def get_database_connection() -> psycopg2.extensions.connection:
     """Retourne une connexion à la base de données PostgreSQL en utilisant les paramètres de configuration."""
 
-    database=POSTGRES_CONFIG["dbname"]
-    user=POSTGRES_CONFIG["user"]
-    password=POSTGRES_CONFIG["password"]
-    host=POSTGRES_CONFIG["host"]
-    port=POSTGRES_CONFIG["port"]
+    database=POSTGRES_CONFIG_TRAIN["dbname"]
+    user=POSTGRES_CONFIG_TRAIN["user"]
+    password=POSTGRES_CONFIG_TRAIN["password"]
+    host=POSTGRES_CONFIG_TRAIN["host"]
+    port=POSTGRES_CONFIG_TRAIN["port"]
 
     return psycopg2.connect(database=database, user=user, password=password, host=host, port=port)
 
