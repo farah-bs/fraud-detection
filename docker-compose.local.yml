@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  fraud-detection-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fraud-api-local
+    ports:
+      - "8000:8000"
+    environment:
+      # Force le mode inférence pour éviter tout entrainement accidentel
+      - MODE=INFERENCE
+
+      # Chemins internes au conteneur (déjà définis dans le Dockerfile, redondance de sécurité)
+      - MODEL_PATH=/app/model/gnn_fraud_detector.pt
+      - MODERATION_MODEL_PATH=/app/model/content_moderation_model.pt
+
+      # Connexion PostgreSQL (Remplacez par vos vrais credentials locaux ou un fichier .env)
+      # host.docker.internal permet de taper sur le localhost de votre machine Windows
+      - PG_HOST_PROD=host.docker.internal
+      - PG_PORT_PROD=5432
+      - PG_DB_PROD=social_app_prod
+      - PG_USER_PROD=social_app_prod
+      - PG_PASS_PROD=social_app_prod
+
+      - PG_HOST_TRAIN=host.docker.internal
+      - PG_PORT_TRAIN=5432
+      - PG_DB_TRAIN=social_app
+      - PG_USER_TRAIN=social_app
+      - PG_PASS_TRAIN=social_app
+
+      # Connexion Neo4j
+      - NEO4J_URI=bolt://host.docker.internal:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASS=Bullpen0-Overtone1-Fretted1-Lustrous9-Nature9
+
+      - GNN_FEATURE_DIM=10
+      - GNN_HIDDEN_DIM=64
+      - GNN_NUM_LAYERS=3
+      - GNN_DROPOUT=0.3
+      - GNN_LR=0.001
+      - GNN_EPOCHS=100
+      - GNN_BATCH_SIZE=32
+
+    # Montage de volume optionnel pour tester des changements de code sans reconstruire l'image
+    # (A commenter si vous voulez tester l'image version "prod" stricte)
+    # volumes:
+    #   - ./api:/app/api
+    #   - ./core:/app/core
+
+    # Politique de redémarrage
+    restart: unless-stopped

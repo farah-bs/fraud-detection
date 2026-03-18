@@ -45,7 +45,7 @@ services:
       dockerfile: Dockerfile.train
     env_file: .env
     environment:
-      PG_HOST:    postgres
+      PG_HOST_TRAIN:    postgres
       NEO4J_URI:  bolt://neo4j:7687
       MODEL_PATH: /app/model/gnn_fraud_detector.pt
     volumes:
@@ -66,7 +66,7 @@ services:
       dockerfile: Dockerfile.api
     env_file: .env
     environment:
-      PG_HOST:    postgres
+      PG_HOST_TRAIN:    postgres
       NEO4J_URI:  bolt://neo4j:7687
       MODEL_PATH: /app/model/gnn_fraud_detector.pt
     ports:

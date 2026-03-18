@@ -97,3 +97,50 @@ IMPORT_DIR=chemin/vers/le/dossier/neo4j/import # Créé précédemment pour le v
 - Lancer le fichier [populate_database_postgresql.py](data/populate_database_postgresql.py) pour insérer les données du dataset dans PostgreSQL.
 - Lancer le fichier [populate_database_neo4j.py](data/populate_database_neo4j.py) pour créer les relations en utilisateurs et insérer les données du dataset dans neo4j.
 
+Plus ou moins, Farah en avait deja dev une bonne partie, je suis en train de les adapter pour le moment je peux te dire qu'il faut :
+- Route pour le batch de score de fraude des utilisateurs :
+  - Méthode : POST 
+  - Route : "/fraud/score/batch"
+  - Paramètre : Aucun
+  - Body : Aucun
+  - Réponse :
+    ```[
+        {
+            "user_id":        int,
+            "fraud_score":    float,
+            "is_suspicious":  bool,
+            "threshold":      float,
+            "message":        string,
+        },
+        {
+            ...
+        }
+    ]
+    ```
+    user_id : id de l'utilisateur
+    fraud_score: float entre 0 et 1 qui annonce la probabilité d'utilisateur frauduleux
+    is_suspicious: booléen basé sur le seuil d'alerte
+    threshold: seuil d'alerte (entre 0 et 1)
+    message: Si suspect : "Compte suspect : vérification supplémentaire recommandée." sinon "Compte normal."
+- Appeler la route de ntore API en POST "/moderation/check" avec pour paramètre :
+  - Méthode : POST 
+  - Route : "/moderation/check"
+  - Paramètre : Aucun
+  - Body : 
+    ```{
+        "content_post": str,
+        "post_id": int,
+    }
+    ```
+  - Réponse :
+    ```{
+         "content_post":   string,
+         "post_id":        int,
+         "scores":         dict[str, float],
+         "verdict":        str,
+    }
+    ```
+    content_post: le contenu du post à modérer
+    post_id: l'id du post à modérer
+    scores: un dictionnaire avec les scores de chaque catégorie de modération ("toxic": float, "severe_toxic": float, "obscene": float, "threat": float, "insult": float, "identity_hate": float, "spam": float, "safe": float)
+    verdict: (toxic, severe_toxic, obscene, threat, insult, identity_hate, spam, safe) un de ces mots selon le seuil de modération (paramétré à 0.5 par défaut)

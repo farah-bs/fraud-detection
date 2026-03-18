@@ -4,6 +4,7 @@ Pipeline d'entraînement du GNN de détection de fraude
 
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -16,7 +17,7 @@ from torch_geometric.data import Data
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from config import MODEL_CONFIG, MODEL_PATH
-from data.graph_features import extract_features
+from model.graph_features import extract_features_train_database
 from model.gnn_model import FraudGNN
 
 
@@ -106,12 +107,25 @@ def evaluate(
 def main():
     cfg = MODEL_CONFIG
 
-    # 1. Extraction des features
-    print("=== Extraction des features ===")
-    node_features, edge_index, labels, user_ids = extract_features()
+    my_file = Path("graph_features.pt")
 
-    # 2. Graphe PyG
-    data = build_graph(node_features, edge_index, labels)
+    if not my_file.is_file():
+        # 1. Extraction des features
+        print("=== Extraction des features ===")
+        node_features, edge_index, labels, user_ids = extract_features_train_database()
+
+        # 2. Graphe PyG
+        data = build_graph(node_features, edge_index, labels)
+
+        tensor_list = [data.x, data.edge_index, data.y, labels, user_ids]
+
+        torch.save(tensor_list, "graph_features.pt")
+    else:
+        tensor_list = torch.load("graph_features.pt", weights_only=False)
+
+        data_x, data_edge_index, data_y, labels, user_ids = tensor_list
+
+        data = Data(x=data_x, edge_index=data_edge_index, y=data_y)
 
     # 3. Masques
     train_mask, val_mask, test_mask = make_masks(len(user_ids), labels)
@@ -186,8 +200,8 @@ def main():
         "model_state_dict": best_state,
         "model_config":     cfg,
         "user_ids":         user_ids,
-        "node_features":    node_features,
-        "edge_index":       edge_index,
+        # "node_features":    node_features,
+        # "edge_index":       edge_index,
         "labels":           labels,
         "val_auc":          best_val_auc,
     }, MODEL_PATH)

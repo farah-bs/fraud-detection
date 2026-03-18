@@ -13,21 +13,31 @@ Endpoints organized by model type:
 
 from __future__ import annotations
 
+import datetime
+import logging
 import os
+import re
 import sys
 from contextlib import asynccontextmanager
 
 import numpy as np
 import torch
-from fastapi import FastAPI, HTTPException
+from uuid import UUID
+from torch_geometric.data import Data
+from fastapi import FastAPI, HTTPException, Depends
+from neo4j import GraphDatabase
 from pydantic import BaseModel
+from sqlalchemy.orm import subqueryload, Session
 from transformers import AutoTokenizer
 import uvicorn
 
+from core.database import get_db_prod
+from entities.prod.user_prod import UserProd
+from api.service import extract_features_prod_database, build_graph
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from config import FRAUD_THRESHOLD, MODEL_PATH, MODEL_CONFIG
+from config import FRAUD_THRESHOLD, MODEL_PATH, MODERATION_MODEL_PATH, MODEL_CONFIG, NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
 from model.gnn_model import FraudGNN
 from model.content_moderation_model import (
     LABEL_NAMES as MOD_LABEL_NAMES,
@@ -35,11 +45,14 @@ from model.content_moderation_model import (
     load_from_checkpoint,
 )
 
-MODERATION_MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "checkpoints",
-    "content_moderation_best.pt",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger(__name__)
+
+# MODERATION_MODEL_PATH = os.path.join(
+#     os.path.dirname(os.path.dirname(__file__)),
+#     "checkpoints",
+#     "content_moderation_best.pt",
+# )
 MODERATION_THRESHOLD = 0.5
 
 # ── État global (chargé une seule fois au démarrage) ─────────────────────────
@@ -53,6 +66,10 @@ _id2idx:        dict[int, int]      = {}
 _mod_model:     ContentModerationModel | None = None
 _mod_tokenizer                                = None
 _mod_device:    torch.device                  = torch.device("cpu")
+
+
+def _neo4j_driver():
+    return GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 
 def _load_model() -> None:
@@ -78,12 +95,12 @@ def _load_model() -> None:
     _model.load_state_dict(checkpoint["model_state_dict"])
     _model.eval()
 
-    node_features = checkpoint["node_features"]
-    edge_index    = checkpoint["edge_index"]
+    # node_features = checkpoint["node_features"]
+    # edge_index    = checkpoint["edge_index"]
     _user_ids     = checkpoint["user_ids"]
 
-    _data_x    = torch.tensor(node_features, dtype=torch.float)
-    _data_edge = torch.tensor(edge_index,    dtype=torch.long)
+    # _data_x    = torch.tensor(node_features, dtype=torch.float)
+    # _data_edge = torch.tensor(edge_index,    dtype=torch.long)
     _id2idx    = {uid: i for i, uid in enumerate(_user_ids)}
 
     print(f"[API] Modèle chargé — {len(_user_ids)} utilisateurs indexés.")
@@ -138,9 +155,9 @@ app = FastAPI(
 # ── Schémas ───────────────────────────────────────────────────────────────────
 
 class FraudScoreResponse(BaseModel):
-    user_id:        int
-    fraud_score:    float   # probabilité [0, 1]
-    is_suspicious:  bool    # True si score >= FRAUD_THRESHOLD
+    userId:        UUID
+    fraudScore:    float   # probabilité [0, 1]
+    isSuspicious:  bool    # True si score >= FRAUD_THRESHOLD
     threshold:      float
     message:        str
 
@@ -173,7 +190,24 @@ def _score_user(user_id: int) -> float:
     return float(proba[idx].item())
 
 
-def _build_response(user_id: int, score: float) -> FraudScoreResponse:
+def score_users_batch(data: Data, index_by_id: dict[UUID, int]) -> dict[UUID, float]:
+    if _model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="GNN fraud detection model not loaded. Train it first: python model/train.py",
+        )
+
+    scores = _model.predict_proba(data.x, data.edge_index)
+
+    score_by_user_id = {}
+
+    for user_id, idx in index_by_id.items():
+        score_by_user_id[user_id] = float(scores[idx].item())
+
+    return score_by_user_id
+
+
+def _build_response(user_id: UUID, score: float) -> FraudScoreResponse:
     suspicious = score >= FRAUD_THRESHOLD
     message = (
         "Compte suspect : vérification supplémentaire recommandée."
@@ -181,9 +215,9 @@ def _build_response(user_id: int, score: float) -> FraudScoreResponse:
         else "Compte normal."
     )
     return FraudScoreResponse(
-        user_id       = user_id,
-        fraud_score   = round(score, 4),
-        is_suspicious = suspicious,
+        userId       = user_id,
+        fraudScore   = round(score, 4),
+        isSuspicious = suspicious,
         threshold     = FRAUD_THRESHOLD,
         message       = message,
     )
@@ -234,8 +268,8 @@ def get_fraud_score(user_id: int):
     return _build_response(user_id, score)
 
 
-@app.post("/fraud/score/batch", response_model=BatchScoreResponse, tags=["GNN Fraud Detection"])
-def get_fraud_scores_batch(request: BatchScoreRequest):
+@app.post("/fraud/score/batch", response_model=list[FraudScoreResponse], tags=["GNN Fraud Detection"])
+def get_fraud_scores_batch(db: Session = Depends(get_db_prod)):
     """
     **GNN Model** - Get fraud scores for multiple user accounts in a single request.
 
@@ -253,19 +287,17 @@ def get_fraud_scores_batch(request: BatchScoreRequest):
     Failed queries return score=-1.0 with error details.
     """
     results = []
-    for uid in request.user_ids:
-        try:
-            score = _score_user(uid)
-            results.append(_build_response(uid, score))
-        except HTTPException as exc:
-            results.append(FraudScoreResponse(
-                user_id       = uid,
-                fraud_score   = -1.0,
-                is_suspicious = False,
-                threshold     = FRAUD_THRESHOLD,
-                message       = exc.detail,
-            ))
-    return BatchScoreResponse(results=results)
+
+    node_features, edge_index, index_by_uuid = extract_features_prod_database(db)
+
+    data = build_graph(node_features, edge_index)
+
+    score_by_user_id = score_users_batch(data, index_by_uuid)
+
+    for user_id, score in score_by_user_id.items():
+        results.append(_build_response(user_id, score))
+
+    return results
 
 
 @app.get("/fraud/top-suspicious", response_model=BatchScoreResponse, tags=["GNN Fraud Detection"])
@@ -298,11 +330,13 @@ def get_top_suspicious(limit: int = 20):
 # ── Content moderation endpoint ───────────────────────────────────────────────
 
 class ModerationRequest(BaseModel):
-    tweet: str
+    content_post: str
+    post_id: int
 
 
 class ModerationResponse(BaseModel):
-    tweet:   str
+    content_post:   str
+    post_id: int
     scores:  dict[str, float]   # label → probability [0, 1]
     verdict: str                # highest-scoring harmful label, or "safe"
 
@@ -347,12 +381,12 @@ def moderate_tweet(request: ModerationRequest):
             ),
         )
 
-    tweet = request.tweet.strip()
-    if not tweet:
+    post = request.content_post.strip()
+    if not post:
         raise HTTPException(status_code=422, detail="tweet text must not be empty")
 
     enc = _mod_tokenizer(
-        tweet,
+        post,
         truncation=True,
         padding="max_length",
         max_length=128,
@@ -372,7 +406,7 @@ def moderate_tweet(request: ModerationRequest):
     if scores[verdict] < MODERATION_THRESHOLD:
         verdict = "safe"
 
-    return ModerationResponse(tweet=tweet, scores=scores, verdict=verdict)
+    return ModerationResponse(content_post=post, post_id=request.post_id, scores=scores, verdict=verdict)
 
 
 # ── Backward Compatibility Aliases (deprecated, redirects to new endpoints) ──

@@ -23,3 +23,5 @@ tensorboard>=2.15.0
 wandb>=0.17.0
 
 pandas
+
+sqlalchemy
