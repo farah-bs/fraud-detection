@@ -39,6 +39,26 @@ NEO4J_URI      = _require("NEO4J_URI")
 NEO4J_USER     = _require("NEO4J_USER")
 NEO4J_PASSWORD = _require("NEO4J_PASS")
 
+# Lien du dossier import permettant d'importer les données brutes (relations) dans Neo4j (via LOAD CSV) cf README.md
+IMPORT_DIR = os.getenv("IMPORT_DIR")
+
+# ── Dataset ──────────────────────────────────────────────────────────────────
+
+DATASET_DIR = os.getenv("DATASET_DIR", "/app/data/social_honeypot_dataset")
+
+# Fraction des following_count à simuler comme liens réels
+# (le dataset donne un compteur, pas les liens individuels)
+FOLLOW_SAMPLE_RATIO = float(os.getenv("GNN_DROPOUT", 0.15))  # 15% des follows déclarés
+
+# Réciprocité : probabilité qu'un follow génère un follow-back
+RECIP_LEGITIMATE = float(os.getenv("GNN_DROPOUT", 0.25))  # ~25% chez les légitimes
+RECIP_POLLUTER = float(os.getenv("GNN_DROPOUT", 0.04))  # ~4%  chez les polluters
+
+# Taille des batchs pour les requêtes Cypher
+BATCH_SIZE = int(os.getenv("GNN_FEATURE_DIM", 5000))
+
+RANDOM_SEED = int(os.getenv("GNN_FEATURE_DIM", 42))
+
 # ── Modèle GNN ───────────────────────────────────────────────────────────────
 MODEL_CONFIG = {
     "node_feature_dim": int(os.getenv("GNN_FEATURE_DIM",   8)),
