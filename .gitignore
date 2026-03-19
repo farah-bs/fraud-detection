@@ -1,5 +1,6 @@
 .env
 notes.md
+notes.txt
 data/processed/*
 .DS_Store
 checkpoints/*
@@ -8,3 +9,14 @@ runs/*
 /.idea/
 /data/social_honeypot_dataset/*
 !/data/social_honeypot_dataset/.gitkeep
+
+# Uncommitted generated/reports/docs
+CONTENT_MODERATION_PIPELINE.md
+CONTENT_MODERATION_PIPELINE.pdf
+EVALUATION_COMPLETE.md
+EVALUATION_REPORT.md
+METRICS_SUMMARY.txt
+evaluation_results/
+
+# Python caches
+**/__pycache__/
